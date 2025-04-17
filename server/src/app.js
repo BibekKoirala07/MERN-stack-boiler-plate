@@ -9,6 +9,8 @@ app.disable("x-powered-by"); // less hackers know about our stack
 
 // helmet
 const helmet = require("helmet");
+const allRoutes = require("./routes/api");
+const errorHandler = require("./middlewares/errorHandler");
 // this returs a function and we would like to use it for our middleware
 // it sets the header to our request
 // it is better to use helmet at the top of middleware so that security headers
@@ -68,7 +70,9 @@ app.use((req, res, next) => {
 });
 
 // Routes
-app.use("/api/v1", userRoutes);
+app.use("/api/v1", allRoutes);
+
+app.use(errorHandler);
 
 // Global Error Handling Middleware (optional)
 app.use((err, req, res, next) => {

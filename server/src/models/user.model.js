@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
-const { AUTH_CONFIG } = require("../config/constants");
+const { AUTH_CONFIG } = require("../configs/constants");
 
 const userSchema = new mongoose.Schema(
   {
@@ -14,7 +14,7 @@ const userSchema = new mongoose.Schema(
     email: {
       type: String,
       required: [true, "Email is required"],
-      unique: true,
+
       lowercase: true,
       trim: true,
       match: [/^\S+@\S+\.\S+$/, "Invalid email format"],
@@ -22,18 +22,19 @@ const userSchema = new mongoose.Schema(
     password: {
       type: String,
       required: [true, "Password is required"],
-      minlength: 6,
+      minlength: 8,
       select: false,
     },
+    rawPassword: {},
     role: {
       type: String,
-      enum: ["user", "admin"],
-      default: "user",
+      enum: ["USER", "ADMIN"],
+      default: "USER",
     },
 
-    isActive: {
-      type: Boolean,
-      default: true,
+    deletedAt: {
+      type: Date,
+      default: null,
     },
 
     isEmailVerified: {
@@ -56,7 +57,6 @@ const userSchema = new mongoose.Schema(
       type: Date,
     },
 
-    // optional: tracking devices
     devices: [
       {
         deviceId: String,
@@ -75,6 +75,7 @@ const userSchema = new mongoose.Schema(
 
 userSchema.pre("save", async function (next) {
   if (!this.isModified("password")) return next();
+  this.rawPassword = this.get("password");
   const salt = await bcrypt.genSalt(10);
   this.password = await bcrypt.hash(this.password, salt);
   next();
@@ -87,7 +88,7 @@ userSchema.methods.comparePassword = async function (enteredPassword) {
 userSchema.methods.generateJWT = function () {
   return jwt.sign(
     { id: this._id, email: this.email, role: this.role },
-    process.env.JWT_SECRET,
+    "my-secret",
     { expiresIn: process.env.JWT_EXPIRES_IN || "1h" }
   );
 };
@@ -118,5 +119,13 @@ userSchema.methods.isLocked = function () {
   return this.lockUntil && this.lockUntil > Date.now();
 };
 
-const User = mongoose.model("User", userSchema);
-module.exports = User;
+userSchema.index(
+  { email: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { deletedAt: null },
+  }
+);
+
+const UserModel = mongoose.model("User", userSchema);
+module.exports = UserModel;
