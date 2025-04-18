@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
-const { AUTH_CONFIG } = require("../configs/constants");
+const { CONFIG } = require("../configs/constants");
 
 const userSchema = new mongoose.Schema(
   {
@@ -14,7 +14,7 @@ const userSchema = new mongoose.Schema(
     email: {
       type: String,
       required: [true, "Email is required"],
-
+      unique: true,
       lowercase: true,
       trim: true,
       match: [/^\S+@\S+\.\S+$/, "Invalid email format"],
@@ -25,7 +25,6 @@ const userSchema = new mongoose.Schema(
       minlength: 8,
       select: false,
     },
-    rawPassword: {},
     role: {
       type: String,
       enum: ["USER", "ADMIN"],
@@ -39,13 +38,17 @@ const userSchema = new mongoose.Schema(
 
     isEmailVerified: {
       type: Boolean,
-      default: !AUTH_CONFIG.ENABLE_EMAIL_VERIFICATION,
+      default: !CONFIG.ENABLE_EMAIL_VERIFICATION,
     },
     emailVerificationToken: String,
     emailVerificationTokenExpires: Date,
 
     resetPasswordToken: String,
     resetPasswordExpires: Date,
+    lastForgotPasswordRequestAt: {
+      type: Date,
+      default: null,
+    },
 
     lastLogin: Date,
 
@@ -73,6 +76,10 @@ const userSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+userSchema.virtual("isDeleted").get(function () {
+  return this.deletedAt !== null;
+});
+
 userSchema.pre("save", async function (next) {
   if (!this.isModified("password")) return next();
   this.rawPassword = this.get("password");
@@ -88,29 +95,27 @@ userSchema.methods.comparePassword = async function (enteredPassword) {
 userSchema.methods.generateJWT = function () {
   return jwt.sign(
     { id: this._id, email: this.email, role: this.role },
-    "my-secret",
-    { expiresIn: process.env.JWT_EXPIRES_IN || "1h" }
+    CONFIG.JWT_SECRET,
+    { expiresIn: CONFIG.JWT_EXPIRES_IN }
   );
 };
 
 userSchema.methods.generateEmailVerificationToken = function () {
-  const rawToken = crypto.randomBytes(20).toString("hex");
+  const rawToken = crypto.randomBytes(45).toString("hex");
   this.emailVerificationToken = crypto
     .createHash("sha256")
     .update(rawToken)
     .digest("hex");
-
   this.emailVerificationTokenExpires = Date.now() + 30 * 60 * 1000;
   return rawToken;
 };
 
 userSchema.methods.generatePasswordResetToken = function () {
-  const rawToken = crypto.randomBytes(20).toString("hex");
+  const rawToken = crypto.randomBytes(45).toString("hex");
   this.resetPasswordToken = crypto
     .createHash("sha256")
     .update(rawToken)
     .digest("hex");
-
   this.resetPasswordExpires = Date.now() + 30 * 60 * 1000;
   return rawToken;
 };
@@ -119,13 +124,22 @@ userSchema.methods.isLocked = function () {
   return this.lockUntil && this.lockUntil > Date.now();
 };
 
-userSchema.index(
-  { email: 1 },
-  {
-    unique: true,
-    partialFilterExpression: { deletedAt: null },
+// Soft delete middleware - Update deletedAt field instead of actual deletion
+userSchema.pre(
+  /^findOneAndDelete|findByIdAndDelete|^delete/,
+  async function (next) {
+    // Set the deletedAt field instead of deleting the record
+    this.set({ deletedAt: new Date() });
+    next();
   }
 );
+
+// automatically include deletedAt : null at all the find query
+userSchema.pre(/^find/, function (next) {
+  // Automatically exclude soft-deleted users for all find queries
+  this.where({ deletedAt: null });
+  next();
+});
 
 const UserModel = mongoose.model("User", userSchema);
 module.exports = UserModel;

@@ -1,25 +1,26 @@
 const express = require("express");
-const {
-  forgotPasswordController,
-  loginController,
-  resetPasswordController,
-  verifyEmailController,
-
-  registerController,
-  deleteAccountController,
-  resendForgotPasswordController,
-  resendEmailVerificationController,
-} = require("./auth.controller");
 
 const {
   registerSchema,
   loginSchema,
   verifyEmailParamsSchema,
   forgotPasswordSchema,
+  resetPasswordSchema,
 } = require("./dtos/auth.dto");
-const validateBodySchema = require("../middlewares/validateBodySchema");
-const validateParamsSchema = require("../middlewares/validateParamsSchema");
+
 const rateLimiter = require("../middlewares/rateLimiter");
+const validateBodySchema = require("../validations/validateBodySchema");
+
+const {
+  registerController,
+  loginController,
+  verifyEmailController,
+  forgotPasswordController,
+
+  resetPasswordController,
+  deleteAccountController,
+} = require("./auth.Controller");
+const validateQuerySchema = require("../validations/validateQuerySchema");
 const authRoutes = express.Router();
 
 authRoutes.post(
@@ -43,43 +44,23 @@ authRoutes.post(
 );
 
 authRoutes.get(
-  "/verify-email/:email/:token",
+  "/verify-email",
   rateLimiter({
     windowMs: 15 * 60 * 1000,
-    max: 5,
+    max: 7,
   }),
-  validateParamsSchema(verifyEmailParamsSchema),
+  validateQuerySchema(verifyEmailParamsSchema),
   verifyEmailController
-);
-
-authRoutes.get(
-  "/verify-email/resend/:email/:token",
-  rateLimiter({
-    windowMs: 15 * 60 * 1000,
-    max: 5,
-  }),
-  validateParamsSchema(verifyEmailParamsSchema),
-  resendEmailVerificationController
 );
 
 authRoutes.post(
   "/forgot-password/request-email",
   rateLimiter({
-    windowMs: 15 * 60 * 1000,
-    max: 5,
+    windowMs: 2 * 60 * 1000, // 3 time every two minutes
+    max: 3,
   }),
   validateBodySchema(forgotPasswordSchema),
   forgotPasswordController
-);
-
-authRoutes.post(
-  "/forgot-password/resend-request-email",
-  rateLimiter({
-    windowMs: 15 * 60 * 1000,
-    max: 5,
-  }),
-  validateBodySchema(forgotPasswordSchema),
-  resendForgotPasswordController
 );
 
 authRoutes.post(
@@ -88,21 +69,8 @@ authRoutes.post(
     windowMs: 15 * 60 * 1000,
     max: 5,
   }),
+  validateBodySchema(resetPasswordSchema),
   resetPasswordController
-);
-
-// authRoutes.post(
-//   "/account/restore",
-//   // authenticate,
-//   // isAdmin,
-//   validateBodySchema(forgotPasswordSchema),
-//   restore
-// );
-
-authRoutes.delete(
-  "/account",
-  // authenticate,
-  deleteAccountController
 );
 
 module.exports = authRoutes;

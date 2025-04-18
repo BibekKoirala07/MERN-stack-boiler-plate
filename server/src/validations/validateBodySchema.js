@@ -1,4 +1,4 @@
-const { BadRequestException } = require("../utils/HttpExceptions");
+const { BadRequestException } = require("../utils/errors/HttpExceptions");
 
 const validateBodySchema = (schema) => (req, res, next) => {
   const result = schema.safeParse(req.body);

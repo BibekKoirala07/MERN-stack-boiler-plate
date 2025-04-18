@@ -3,7 +3,7 @@ const CustomError = require("./CustomError");
 class BadRequestException extends CustomError {
   constructor(message = "Bad request") {
     console.log("here", message);
-    super(message, 400, "BadRequest"); // Explicit error type
+    super(message, 400, "BadRequest");
   }
 }
 

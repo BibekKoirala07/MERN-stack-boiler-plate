@@ -1,7 +1,8 @@
 const app = require("./app");
-const connectDB = require("./db/db");
+const { CONFIG } = require("./configs/constants");
+const connectDB = require("./utils/db/db");
 
-const PORT = process.env.PORT || 3000;
+const PORT = CONFIG.PORT || 3000;
 
 connectDB()
   .then(() => {

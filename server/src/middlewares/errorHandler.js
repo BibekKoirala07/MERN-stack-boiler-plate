@@ -1,7 +1,7 @@
 const {
   BadRequestException,
   ConflictException,
-} = require("../utils/HttpExceptions");
+} = require("../utils/errors/HttpExceptions");
 
 const errorHandler = (err, req, res, next) => {
   if (err.name === "ValidationError") {

@@ -1,7 +1,10 @@
-const { AUTH_CONFIG } = require("../configs/constants");
 const UserModel = require("../models/user.model");
-const catchAsyncError = require("../utils/catchAsyncError");
-const { transporter } = require("../utils/emails");
+const catchAsyncError = require("../utils/errors/catchAsyncError");
+const {
+  transporter,
+
+  sendAuthVerificationEmail,
+} = require("../utils/email/emails");
 const crypto = require("crypto");
 
 const {
@@ -10,35 +13,38 @@ const {
   UnauthorizedException,
   ForbiddenException,
   NotFoundException,
-} = require("../utils/HttpExceptions");
+  InternalServerErrorException,
+} = require("../utils/errors/HttpExceptions");
+const handleUnverifiedUser = require("../utils/auth/handleUnverifiedUsers");
+const { CONFIG } = require("../configs/constants");
 
 exports.registerController = catchAsyncError(async (req, res, next) => {
-  const user = await UserModel.create(req.validatedBody);
-
   const { email } = req.validatedBody;
 
-  if (AUTH_CONFIG.ENABLE_EMAIL_VERIFICATION) {
-    const verificationToken = user.generateEmailVerificationToken();
-    await user.save({ validateBeforeSave: false });
+  const existingUser = await UserModel.findOne({ email });
 
-    const verifyUrl = `${process.env.CLIENT_URL}/verify-email/${email}/${verificationToken}`;
-    const mailOptions = {
-      from: `"Support" <${process.env.NODEMAILER_SENDING_EMAIL_TO}>`,
-      to: user.email,
-      subject: "Verify Your Email",
-      html: `<p>Hello ${user.name},</p>
-             <p>Click below to verify your email:</p>
-             <a href="${verifyUrl}">${verifyUrl}</a>`,
-    };
-    await transporter.sendMail(mailOptions);
-    return res.status(201).json({
-      success: true,
-      message: "User registered. Please verify your email.",
-      url: verifyUrl,
-    });
+  if (existingUser) {
+    if (existingUser.deletedAt) {
+      throw new NotFoundException(
+        "This resource is deleted. You aren't permitted to use it."
+      );
+    }
+
+    if (CONFIG.ENABLE_EMAIL_VERIFICATION && !existingUser.isEmailVerified) {
+      const handled = await handleUnverifiedUser(existingUser, res, next);
+      if (handled) return;
+    }
+
+    throw new BadRequestException("Email is already registered.");
   }
-  if (AUTH_CONFIG.AUTO_LOGIN_AFTER_REGISTER) {
-    console.log("here");
+
+  const user = await UserModel.create(req.validatedBody);
+
+  if (CONFIG.ENABLE_EMAIL_VERIFICATION) {
+    const handled = await handleUnverifiedUser(user, res, next);
+    if (handled) return;
+  }
+  if (CONFIG.AUTO_LOGIN_AFTER_REGISTER) {
     const token = await user.generateJWT();
     return res.status(201).json({
       success: true,
@@ -47,25 +53,24 @@ exports.registerController = catchAsyncError(async (req, res, next) => {
       data: user,
     });
   }
-  // this would tell the user to go to login.
+
   return res.status(201).json({
     success: true,
     message: "User registered. Login to gain access.",
   });
 });
 
-exports.loginController = catchAsyncError(async (req, res) => {
+exports.loginController = catchAsyncError(async (req, res, next) => {
   const { email, password } = req.validatedBody;
-
-  console.log("req.validteBody", req.validatedBody);
 
   const user = await UserModel.findOne({ email }).select("+password");
   if (!user || !(await user.comparePassword(password))) {
     throw new UnauthorizedException("Invalid credentials");
   }
 
-  if (AUTH_CONFIG.ENABLE_EMAIL_VERIFICATION && !user.isEmailVerified) {
-    throw new ForbiddenException("Email not verified. Re register to login");
+  if (CONFIG.ENABLE_EMAIL_VERIFICATION && !user.isEmailVerified) {
+    const handled = await handleUnverifiedUser(existingUser, res, next);
+    if (handled) return;
   }
 
   user.lastLogin = Date.now();
@@ -75,45 +80,13 @@ exports.loginController = catchAsyncError(async (req, res) => {
   res.status(200).json({ success: true, token, data: user });
 });
 
-exports.resendEmailVerificationController = catchAsyncError(
-  async (req, res) => {
-    const { email } = forgotPasswordSchema.parse(req.body);
-    const user = await UserModel.findOne({ email });
-    if (!user) throw new NotFoundException("User not found");
-
-    if (user.isEmailVerified) {
-      throw new ConflictException("Email is already verified");
-    }
-
-    const resetPasswordToken = user.generatePasswordResetToken();
-    await user.save({ validateBeforeSave: false });
-
-    const verifyUrl = `${process.env.CLIENT_URL}/auth/verify-email/${email}/${resetPasswordToken}`;
-    const mailOptions = {
-      from: `"Support" <${process.env.NODEMAILER_SENDING_EMAIL_TO}>`,
-      to: user.email,
-      subject: "Resending the request password email",
-      html: `<p>Hello ${user.name},</p>
-             <p>Click below to get reset password link:</p>
-             <a href="${verifyUrl}">${verifyUrl}</a>`,
-    };
-
-    await transporter.sendMail(mailOptions);
-
-    return res
-      .status(200)
-      .json({ success: true, message: "The resend email has been sent" });
-  }
-);
-
 exports.verifyEmailController = catchAsyncError(async (req, res, next) => {
-  const { email, token } = req.validatedParams;
-
-  console.log("email", token);
+  const { email, token } = req.validatedQuery;
 
   const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
 
   const user = await UserModel.findOne({
+    email,
     emailVerificationToken: hashedToken,
     emailVerificationTokenExpires: { $gt: Date.now() },
   });
@@ -128,45 +101,62 @@ exports.verifyEmailController = catchAsyncError(async (req, res, next) => {
   user.emailVerificationTokenExpires = undefined;
 
   await user.save({ validateBeforeSave: false });
-  res.status(200).json({ success: true, message: "You have been verified" });
+  res
+    .status(200)
+    .json({ success: true, message: "You have been verified. Login Now" });
 });
 
-exports.forgotPasswordController = catchAsyncError(async (req, res) => {
+exports.forgotPasswordController = catchAsyncError(async (req, res, next) => {
   const { email } = req.validatedBody;
-
-  console.log("req", req.validatedBody);
 
   const user = await UserModel.findOne({ email });
   if (!user) throw new NotFoundException("User not found");
 
+  if (CONFIG.ENABLE_EMAIL_VERIFICATION && !user.isEmailVerified) {
+    const handled = await handleUnverifiedUser(existingUser, res, next);
+    if (handled) return;
+  }
+
+  const now = Date.now();
+  const timeDifference = now - user.lastForgotPasswordRequestAt?.getTime();
+
+  if (user.lastForgotPasswordRequestAt && timeDifference < 2 * 60 * 1000) {
+    const secondsLeft = Math.ceil((2 * 60 * 1000 - timeDifference) / 1000);
+    return next(
+      new BadRequestException(
+        `Please wait ${secondsLeft}s before trying again.`
+      )
+    );
+  }
+
   const resetPasswordToken = user.generatePasswordResetToken();
   await user.save({ validateBeforeSave: false });
 
-  console.log("resetPasswordTone", resetPasswordToken);
-
-  const verifyUrl = `${process.env.CLIENT_URL}/auth/verify-email/${email}/${resetPasswordToken}`;
+  const verifyUrl = `${process.env.CLIENT_FRONTEND_URL}/auth/reset-password?email=${email}&token=${resetPasswordToken}`;
   const mailOptions = {
     from: `"Support" <${process.env.NODEMAILER_SENDING_EMAIL_TO}>`,
     to: user.email,
-    subject: "Frogot Password email",
+    subject: "Forgot Password Email",
     html: `<p>Hello ${user.name},</p>
-             <p>Click below to get reset password link:</p>
+             <p>Click below to get the reset password link:</p>
              <a href="${verifyUrl}">${verifyUrl}</a>`,
   };
 
   await transporter.sendMail(mailOptions);
 
-  res.status(200).json({ success: true, message: "The email has been sent" });
+  user.lastForgotPasswordRequestAt = new Date();
+  await user.save();
+
+  res.status(200).json({ success: true, message: "The email has been sent." });
 });
 
-// ─── RESEND EMAIL VERIFICATION ────
-
 exports.resetPasswordController = catchAsyncError(async (req, res) => {
-  const { token, password } = resetPasswordSchema.parse(req.body);
+  const { email, token, newPassword } = req.validatedBody;
 
   const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
 
   const user = await UserModel.findOne({
+    email,
     resetPasswordToken: hashedToken,
     resetPasswordExpires: { $gt: Date.now() },
   });
@@ -174,42 +164,15 @@ exports.resetPasswordController = catchAsyncError(async (req, res) => {
   if (!user)
     throw new BadRequestException("Invalid or expired password reset token");
 
-  user.password = password;
+  user.password = newPassword;
   user.resetPasswordToken = undefined;
   user.resetPasswordExpires = undefined;
 
   await user.save();
-
   return res.status(201).json({
     success: true,
     message: "The password has been reseted Now login to gain access",
   });
-});
-
-exports.resendForgotPasswordController = catchAsyncError(async (req, res) => {
-  const { email } = req.validatedBody;
-
-  console.log("req", req.validatedBody);
-
-  const user = await UserModel.findOne({ email });
-  if (!user) throw new NotFoundException("User not found");
-
-  const resetPasswordToken = user.generatePasswordResetToken();
-  await user.save({ validateBeforeSave: false });
-
-  const verifyUrl = `${process.env.CLIENT_URL}/auth/verify-email/${email}/${resetPasswordToken}`;
-  const mailOptions = {
-    from: `"Support" <${process.env.NODEMAILER_SENDING_EMAIL_TO}>`,
-    to: user.email,
-    subject: "Resending forgot passowrd email",
-    html: `<p>Hello ${user.name},</p>
-             <p>Click below to get reset password link:</p>
-             <a href="${verifyUrl}">${verifyUrl}</a>`,
-  };
-
-  await transporter.sendMail(mailOptions);
-
-  res.status(200).json({ success: true, message: "The email has been sent" });
 });
 
 exports.deleteAccountController = catchAsyncError(async (req, res, next) => {

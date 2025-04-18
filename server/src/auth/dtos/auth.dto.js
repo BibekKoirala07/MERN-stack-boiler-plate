@@ -36,9 +36,10 @@ const forgotPasswordSchema = z
 
 const resetPasswordSchema = z
   .object({
+    email: emailField,
     token: tokenField,
-    password: passwordField,
     newPassword: passwordField,
+    confirmPassword: passwordField,
   })
   .strict();
 

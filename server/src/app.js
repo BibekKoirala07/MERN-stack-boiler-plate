@@ -1,6 +1,12 @@
 const express = require("express");
 const cors = require("cors");
-// const cookieParser = require("cookie-parser");
+console.log("real", process.env.PORT);
+
+// if (process.env.NODE_ENV !== "production") {
+//   require("dotenv").config();
+// }
+
+console.log("process.env", process.env.NODE_ENV);
 
 const app = express();
 
@@ -11,6 +17,7 @@ app.disable("x-powered-by"); // less hackers know about our stack
 const helmet = require("helmet");
 const allRoutes = require("./routes/api");
 const errorHandler = require("./middlewares/errorHandler");
+const { NotFoundException } = require("./utils/errors/HttpExceptions");
 // this returs a function and we would like to use it for our middleware
 // it sets the header to our request
 // it is better to use helmet at the top of middleware so that security headers
@@ -50,35 +57,13 @@ app.use(
   })
 );
 
-const allowedDomains = ["http://localhost:3000"]; // this block shouldn't be used
-app.use((req, res, next) => {
-  // only if cors ins't working as we all should use package. No question
-  const origin = req.headers.origin;
-  if (allowedDomains.includes(origin)) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-  }
-  res.header("Access-Control-Allow-Credentials", "true");
-  res.header(
-    "Access-Control-Allow-Headers",
-    "Origin,X-Requested-With,Content-Type,Accept,Authorization"
-  );
-  if (req.method === "OPTIONS") {
-    res.header("Access-Control-Allow-Methods", "PUT,POST,PATCH,DELETE,GET");
-    return res.status(200).json({});
-  }
-  next();
-});
-
-// Routes
 app.use("/api/v1", allRoutes);
 
 app.use(errorHandler);
 
-// Global Error Handling Middleware (optional)
-app.use((err, req, res, next) => {
-  const status = err.statusCode || 500;
-  const message = err.message || "Server problem";
-  res.status(status).json({ message, status });
+app.use((req, res, next) => {
+  console.log(`No route matched for ${req.method} ${req.originalUrl}`);
+  throw new NotFoundException("Route Not Found");
 });
 
 module.exports = app;
